@@ -185,10 +185,7 @@ def lookupTable():
         table.append(i*PP.g)
     return table
 
-#start_table = time.time()
 TABLE = lookupTable() #precompute lookup table for decrypting values
-#end_table = time.time()
-#print("Lookup table compute time: " + str( round( (end_table - start_table)*1e3 ,3) ) + "ms")
 
 def twistEncrypt(pk,m,randomness = None):
     """Encrypts using Twisted ElGamal scheme
@@ -335,30 +332,14 @@ def createTx(ledger,valuearray,initialize = False):
                     #if spending, find v_hat from c2_hat
                     totalAssets = twistDecrypt(colmn.bank.sk,runTot,TABLE)
                     v_hat = Secret(value=totalAssets)
-                    #set cm = v_hat*g + r_prime * h
                     cmAux = totalAssets*PP.g + rand_prime.value*PP.h
                     stmt1 = DLRep(cmAux, v * PP.g + rand_prime * PP.h) & DLRep(ciphers[1], v * PP.g + rand * PP.h) & DLRep(ciphers[0], rand*colmn.bank.pk) 
                     stmt2 = DLRep(cmAux, v_hat*PP.g + rand_prime*PP.h) & DLRep(runTot[1],v_hat*PP.g + Secret(value=colmn.bank.sk.value.mod_inverse(m = PP.group.order()))*runTot[0]) & DLRep(ciphers[1], v * PP.g + rand * PP.h) & DLRep(ciphers[0], rand*colmn.bank.pk) & DLRep(colmn.bank.pk, colmn.bank.sk*PP.h) & RangeStmt(cmAux,PP.g,PP.h,0,TABLERANGE,v_hat,rand_prime)
                     stmt1.set_simulated()
-                #construct ZKP piAC
-                #Witnesses: 
-                #v = valuearray[i]
-                #r = rand
-                #r' = rand_prime
-                #v_hat = totalAssets
-                #sk = colmn.bank.sk
-                #Public information:
-                #pk = colmn.bank.pk
-                #cm = cmAux
-                #(c1,c2) = ciphers
-                #c2_hat = runTot
                 or_stmt = OrProofStmt(stmt1, stmt2)
-                #rangeprf = RangeStmt(cmAux,PP.g,PP.h,0,TABLERANGE,rand_prime)
-                #nizk = or_stmt.prove() #piAC
                 piACproof = OrProof(or_stmt,or_stmt.prove())
             colmn.cells.append(MiniCell(ciphers,cmAux,piACproof,None,runTot))
             randomsum = randomsum.mod_add(rand.value,PP.group.order()) #add randomness mod grp order
-    #twistDecrypt(L[9].bank.sk,L[9].cells[0].cipher,table)            
 
 def piBverify(ledger,row):
     """Verifies balance on a ledger row
@@ -461,8 +442,6 @@ def auditTx(column,i):
     #Bank first decrypts value
     v = twistDecrypt(column.bank.sk, column.cells[i].cipher,TABLE)
     #construct audit NIZK pi^Aud
-    #c1 = colmumn.cells[i].cipher[0]
-    #c2 = colmumn.cells[i].cipher[1]
     stmt = DLRep(column.cells[i].cipher[1] - v * PP.g, Secret(value=column.bank.sk.value.mod_inverse(m = PP.group.order())) * column.cells[i].cipher[0])
     nizk = stmt.prove() #sk doesn't need to be supplied since it's set in a Secret() constructor.
     check = stmt.verify(nizk)
@@ -511,8 +490,6 @@ def pruneMerkle(column,depth=None):
     starttime = process_time()
     mtree = MerkleTree(privateList,h)
     endtime = process_time()
-    #proof = tree.get_proof(h(pruneList[0]))
-    #tree.verify_leaf_inclusion(pruneList[0],proof)
     return [privateList,mtree,round( (endtime - starttime)*1e3 ,3)]
 
 def proveMerkle(privateList,mtree,i):
@@ -581,7 +558,6 @@ def hashToPrime(number):
     x = int(newhash,16)
     if miller_rabin.miller_rabin(x,20):
         #Check if prime
-        #maybe replace with Bn.is_prime() ?
         return x
     else:
         return hashToPrime(x)
@@ -615,7 +591,6 @@ def pruneRSA(column,depth=None):
         if i >= depth:
             break
         #append row index i and (c1,c2) to list
-        #privateList.append([i,cell.cipher])
         privateList.append(cell.cipher)
         #convert EC points to integers, add with index and compute hash to prime
         primeList.append(hashToPrime(i + ecPt2Int(cell.cipher[0]) + ecPt2Int(cell.cipher[1])))
@@ -651,11 +626,9 @@ def proveRSA(privateList,primeList,iList):
     #compute witness for those elements (primes not from queried elements)
     prodlist = [item for item in primeList if item not in list( primeList[i] for i in iList)]
     starttime = process_time()
-    #primeprod = numpy.prod([item for item in primeList if item not in list( primeList[i] for i in iList)])
     primeprod = numpy.prod(prodlist)
     witness = acc.pow(Bn.from_decimal(str(primeprod)),N)
     endtime = process_time()
-    #prPrimeProduct = numpy.prod(list( primeList[i] for i in iList))
     return [proveList,witness,round( (endtime - starttime)*1e3 ,3)]
 
 def verifyRSA(acc,witness,proveList,iList):
@@ -680,23 +653,4 @@ def verifyRSA(acc,witness,proveList,iList):
     #compute prime product for elements to be verified membership
     for i,cell in zip(iList,proveList):
         primeProd = primeProd * hashToPrime(i + ecPt2Int(cell[0]) + ecPt2Int(cell[1]))
-    #return acc == Bn(3).pow(Bn.from_decimal(str(witness*primeProd)),N)
     return acc == witness.pow(Bn.from_decimal(str(primeProd)),N)
-
-'''
-#Sample run:
-L = MakeLedger(10)
-createTx(L,[100,100,100,100,100,100,100,100,100,100],True)
-print("Initialization row " + str(decryptRow(L,0)))
-createTx(L,[-5,0,0,0,0,0,0,0,0,5])
-print("Values after first tx: " + str(decryptRow(L,1)))
-print("NIZK piAC: " + str(verifyRow(L,1)))
-print("piB: " + str(piBverify(L,1)))
-createTx(L,[-15,0,0,0,0,0,0,0,15,0])
-createTx(L,[0,0,0,0,0,0,0,0,-15,15])
-'''
-#Will throw an error because of not enough assets
-#createTx(L,[-96,0,0,0,0,0,0,0,0,96])
-
-#L = MakeLedger(2)
-#createTx(L,[-5,5])
